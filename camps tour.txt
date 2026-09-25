@@ -1,0 +1,914 @@
+from flask import Flask, render_template, request, redirect, url_for
+import sqlite3
+import heapq
+
+app = Flask(__name__)
+
+DATABASE = "campus.db"
+
+
+# ---------------- DATABASE CONNECTION ----------------
+
+def get_db_connection():
+    connection = sqlite3.connect(DATABASE)
+    connection.row_factory = sqlite3.Row
+    return connection
+
+
+# ---------------- CREATE DATABASE ----------------
+
+def create_database():
+
+    connection = get_db_connection()
+
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            date TEXT NOT NULL,
+            venue TEXT NOT NULL,
+            description TEXT
+        )
+    """)
+
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS resources (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            location TEXT NOT NULL,
+            available INTEGER NOT NULL,
+            total INTEGER NOT NULL
+        )
+    """)
+
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS complaints (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_name TEXT NOT NULL,
+            location TEXT NOT NULL,
+            description TEXT NOT NULL,
+            category TEXT NOT NULL,
+            status TEXT NOT NULL
+        )
+    """)
+
+    # Check whether events already exist
+    event_count = connection.execute(
+        "SELECT COUNT(*) FROM events"
+    ).fetchone()[0]
+
+    if event_count == 0:
+
+        # Event 1
+        connection.execute("""
+            INSERT INTO events
+            (name, date, venue, description)
+            VALUES (?, ?, ?, ?)
+        """, (
+            "Data Science Workshop",
+            "2026-09-20",
+            "Seminar Hall",
+            "Hands-on workshop on Python and machine learning."
+        ))
+
+        # Event 2
+        connection.execute("""
+            INSERT INTO events
+            (name, date, venue, description)
+            VALUES (?, ?, ?, ?)
+        """, (
+            "College Cultural Fest",
+            "2026-09-25",
+            "Main Auditorium",
+            "Annual cultural celebration for students."
+        ))
+
+    # Check whether resources already exist
+    resource_count = connection.execute(
+        "SELECT COUNT(*) FROM resources"
+    ).fetchone()[0]
+
+    if resource_count == 0:
+
+        # Computers
+        connection.execute("""
+            INSERT INTO resources
+            (name, location, available, total)
+            VALUES (?, ?, ?, ?)
+        """, (
+            "Computers",
+            "CSE Lab 2",
+            25,
+            40
+        ))
+
+        # Library Seats
+        connection.execute("""
+            INSERT INTO resources
+            (name, location, available, total)
+            VALUES (?, ?, ?, ?)
+        """, (
+            "Library Seats",
+            "Central Library",
+            60,
+            100
+        ))
+
+        # Projectors
+        connection.execute("""
+            INSERT INTO resources
+            (name, location, available, total)
+            VALUES (?, ?, ?, ?)
+        """, (
+            "Projectors",
+            "Seminar Hall",
+            2,
+            3
+        ))
+
+    connection.commit()
+    connection.close()
+
+
+# ---------------- GM UNIVERSITY CAMPUS GRAPH ----------------
+
+campus_graph = {
+
+    "Main Gate": {
+        "Admin Block": 3,
+        "GMIT Block": 5
+    },
+
+    "Admin Block": {
+        "Main Gate": 3,
+        "Library Block": 4,
+        "GMS Block": 5
+    },
+
+    "Library Block": {
+        "Admin Block": 4,
+        "GMS Block": 3,
+        "GMIPSR Block": 5
+    },
+
+    "GMS Block": {
+        "Admin Block": 5,
+        "Library Block": 3,
+        "GMIPSR Block": 4
+    },
+
+    "GMIPSR Block": {
+        "GMS Block": 4,
+        "Library Block": 5,
+        "GMIT Block": 6
+    },
+
+    "GMIT Block": {
+        "Main Gate": 5,
+        "GMIPSR Block": 6,
+        "Boys Hostel": 7
+    },
+
+    "Boys Hostel": {
+        "GMIT Block": 7,
+        "Girls Hostel": 8
+    },
+
+    "Girls Hostel": {
+        "Boys Hostel": 8,
+        "Guest House": 4
+    },
+
+    "Guest House": {
+        "Girls Hostel": 4,
+        "Faculty Quarters": 5
+    },
+
+    "Faculty Quarters": {
+        "Guest House": 5,
+        "Services Block": 4
+    },
+
+    "Services Block": {
+        "Faculty Quarters": 4,
+        "Admin Block": 6
+    }
+}
+
+
+# ---------------- SHORTEST PATH ----------------
+
+def shortest_path(start, end):
+
+    queue = [(0, start, [start])]
+    visited = set()
+
+    while queue:
+
+        distance, current_place, path = heapq.heappop(queue)
+
+        if current_place in visited:
+            continue
+
+        visited.add(current_place)
+
+        if current_place == end:
+            return path, distance
+
+        for neighbour, cost in campus_graph[current_place].items():
+
+            if neighbour not in visited:
+
+                heapq.heappush(
+                    queue,
+                    (
+                        distance + cost,
+                        neighbour,
+                        path + [neighbour]
+                    )
+                )
+
+    return [], 0
+
+
+# ---------------- COMPLAINT CLASSIFICATION ----------------
+
+def classify_complaint(text):
+
+    text = text.lower()
+
+    if any(word in text for word in [
+        "wifi",
+        "internet",
+        "network"
+    ]):
+        return "Network"
+
+    if any(word in text for word in [
+        "fan",
+        "light",
+        "electric",
+        "power"
+    ]):
+        return "Electrical"
+
+    if any(word in text for word in [
+        "water",
+        "leak",
+        "washroom",
+        "tap"
+    ]):
+        return "Plumbing"
+
+    if any(word in text for word in [
+        "computer",
+        "projector",
+        "keyboard"
+    ]):
+        return "Equipment"
+
+    return "General Maintenance"
+
+
+# ---------------- HOME PAGE ----------------
+
+@app.route("/")
+def home():
+
+    connection = get_db_connection()
+
+    events = connection.execute(
+        "SELECT * FROM events ORDER BY date LIMIT 3"
+    ).fetchall()
+
+    resources = connection.execute(
+        "SELECT * FROM resources"
+    ).fetchall()
+
+    complaints = connection.execute(
+        "SELECT * FROM complaints ORDER BY id DESC"
+    ).fetchall()
+
+    connection.close()
+
+    return render_template(
+        "index.html",
+        locations=campus_graph.keys(),
+        events=events,
+        resources=resources,
+        complaints=complaints
+    )
+
+
+# ---------------- FIND ROUTE ----------------
+
+@app.route("/find-route", methods=["POST"])
+def find_route():
+
+    start = request.form["start"]
+    destination = request.form["destination"]
+
+    path, distance = shortest_path(
+        start,
+        destination
+    )
+
+    connection = get_db_connection()
+
+    events = connection.execute(
+        "SELECT * FROM events ORDER BY date LIMIT 3"
+    ).fetchall()
+
+    resources = connection.execute(
+        "SELECT * FROM resources"
+    ).fetchall()
+
+    complaints = connection.execute(
+        "SELECT * FROM complaints ORDER BY id DESC"
+    ).fetchall()
+
+    connection.close()
+
+    return render_template(
+        "index.html",
+        locations=campus_graph.keys(),
+        events=events,
+        resources=resources,
+        complaints=complaints,
+        route_path=" → ".join(path),
+        route_distance=distance,
+        walking_time=distance * 2
+    )
+
+
+# ---------------- COMPLAINT ----------------
+
+@app.route("/complaint", methods=["POST"])
+def complaint():
+
+    student_name = request.form["student_name"]
+    location = request.form["location"]
+    description = request.form["description"]
+
+    category = classify_complaint(description)
+
+    connection = get_db_connection()
+
+    connection.execute("""
+        INSERT INTO complaints
+        (student_name, location, description, category, status)
+        VALUES (?, ?, ?, ?, ?)
+    """, (
+        student_name,
+        location,
+        description,
+        category,
+        "Open"
+    ))
+
+    connection.commit()
+    connection.close()
+
+    return redirect(url_for("home"))
+
+
+# ---------------- GM UNIVERSITY CHATBOT ----------------
+
+@app.route("/chatbot", methods=["GET", "POST"])
+def chatbot():
+
+    answer = ""
+
+    if request.method == "POST":
+
+        question = request.form["question"].lower().strip()
+
+        # ---------------- GM UNIVERSITY ----------------
+
+        if (
+            "gm university" in question
+            or "gmu" in question
+            or "about university" in question
+            or "about gmu" in question
+        ):
+
+            answer = (
+                "GM University (GMU) is located in Davanagere, "
+                "Karnataka, on the Poona-Bangalore Highway. "
+                "The campus is spread across 57 acres and includes "
+                "academic buildings, a library, sports grounds, "
+                "boys and girls hostels, faculty quarters and a cafeteria."
+            )
+
+
+        # ---------------- CAMPUS ----------------
+
+        elif (
+            "campus" in question
+            or "college campus" in question
+        ):
+
+            answer = (
+                "The GM University campus is located on the "
+                "Poona-Bangalore Highway in Davanagere. "
+                "GMU's official website describes the campus as "
+                "a green and serene 57-acre campus with academic "
+                "buildings, library, sports grounds, hostels, "
+                "faculty quarters and cafeteria."
+            )
+
+
+        # ---------------- CSE ----------------
+
+        elif (
+            "cse" in question
+            or "computer science" in question
+        ):
+
+            answer = (
+                "GM University lists Computer Science and Engineering "
+                "(CSE) among its departments/program areas."
+            )
+
+
+        # ---------------- AIML ----------------
+
+        elif (
+            "aiml" in question
+            or "artificial intelligence" in question
+            or "machine learning" in question
+        ):
+
+            answer = (
+                "GM University lists Artificial Intelligence and "
+                "Machine Learning (AIML) among its programs/departments."
+            )
+
+
+        # ---------------- ISE ----------------
+
+        elif (
+            "ise" in question
+            or "information science" in question
+        ):
+
+            answer = (
+                "GM University lists Information Science and Engineering "
+                "(ISE) among its programs/departments."
+            )
+
+
+        # ---------------- DATA SCIENCE ----------------
+
+        elif (
+            "data science" in question
+            or "data science and iot" in question
+        ):
+
+            answer = (
+                "GM University lists Data Science and IoT among "
+                "its computing and technology areas."
+            )
+
+
+        # ---------------- CYBER SECURITY ----------------
+
+        elif (
+            "cyber security" in question
+            or "cybersecurity" in question
+        ):
+
+            answer = (
+                "GM University lists Cyber Security among its "
+                "computing and technology areas."
+            )
+
+
+        # ---------------- CLOUD COMPUTING ----------------
+
+        elif "cloud computing" in question:
+
+            answer = (
+                "GM University lists Cloud Computing among its "
+                "computing and technology areas."
+            )
+
+
+        # ---------------- ECE ----------------
+
+        elif (
+            "ece" in question
+            or "electronics" in question
+        ):
+
+            answer = (
+                "GM University lists Electronics and Communication "
+                "Engineering (ECE) among its engineering areas."
+            )
+
+
+        # ---------------- EEE ----------------
+
+        elif (
+            "eee" in question
+            or "electrical engineering" in question
+        ):
+
+            answer = (
+                "GM University lists Electrical and Electronics "
+                "Engineering (EEE) among its engineering areas."
+            )
+
+
+        # ---------------- MECHANICAL ----------------
+
+        elif "mechanical" in question:
+
+            answer = (
+                "GM University lists Mechanical Engineering "
+                "among its engineering areas."
+            )
+
+
+        # ---------------- CIVIL ----------------
+
+        elif "civil" in question:
+
+            answer = (
+                "GM University lists Civil Engineering "
+                "among its engineering areas."
+            )
+
+
+        # ---------------- ROBOTICS ----------------
+
+        elif (
+            "robotics" in question
+            or "robotics and automation" in question
+        ):
+
+            answer = (
+                "GM University lists Robotics and Automation "
+                "among its engineering areas."
+            )
+
+
+        # ---------------- BIOTECHNOLOGY ----------------
+
+        elif "biotechnology" in question:
+
+            answer = (
+                "GM University lists Biotechnology among "
+                "its academic areas."
+            )
+
+
+        # ---------------- LIBRARY ----------------
+
+        elif (
+            "library" in question
+            or "central library" in question
+        ):
+
+            answer = (
+                "The GMU Library is located in the heart of the campus "
+                "and has two floors with a reported area of 2540 square "
+                "metres and seating capacity of 500. It provides services "
+                "including book circulation, reference services, digital "
+                "library, OPAC, internet access, English Language Lab, "
+                "reprographic services and an Audio/Visual Room."
+            )
+
+
+        # ---------------- LIBRARY TIMINGS ----------------
+
+        elif (
+            "library timing" in question
+            or "library timings" in question
+            or "library time" in question
+        ):
+
+            answer = (
+                "According to GMU Library rules, the reference section "
+                "is open Monday to Saturday from 9:00 AM to 10:00 PM "
+                "and on Sundays from 9:00 AM to 5:00 PM, excluding "
+                "government holidays."
+            )
+
+
+        # ---------------- CAFETERIA / CANTEEN ----------------
+
+        elif (
+            "canteen" in question
+            or "cafeteria" in question
+            or "food" in question
+        ):
+
+            answer = (
+                "GM University has a cafeteria on campus. "
+                "The official GMU information describes it as a facility "
+                "for students, staff and visitors, offering meals, snacks "
+                "and beverages."
+            )
+
+
+        # ---------------- HOSTEL ----------------
+
+        elif (
+            "hostel" in question
+            or "boys hostel" in question
+            or "girls hostel" in question
+        ):
+
+            answer = (
+                "GM University provides separate hostels for boys and "
+                "girls on campus."
+            )
+
+
+        # ---------------- SPORTS ----------------
+
+        elif (
+            "sports" in question
+            or "sports ground" in question
+            or "ground" in question
+        ):
+
+            answer = (
+                "The GM University campus includes sports grounds "
+                "as part of its campus facilities."
+            )
+
+
+        # ---------------- TRANSPORT ----------------
+
+        elif (
+            "bus" in question
+            or "transport" in question
+        ):
+
+            answer = (
+                "GM University provides transport facilities for "
+                "day scholars. University buses operate between "
+                "Davanagere city and the campus."
+            )
+
+
+        # ---------------- ADMIN BLOCK ----------------
+
+        elif "admin block" in question:
+
+            answer = (
+                "The Admin Block is one of the campus buildings "
+                "listed in GM University's campus development information."
+            )
+
+
+        # ---------------- GMIT BLOCK ----------------
+
+        elif "gmit block" in question:
+
+            answer = (
+                "GMIT Block is one of the completed buildings "
+                "listed in GM University's campus development information."
+            )
+
+
+        # ---------------- GMS BLOCK ----------------
+
+        elif "gms block" in question:
+
+            answer = (
+                "GMS Block is one of the completed buildings "
+                "listed in GM University's campus development information."
+            )
+
+
+        # ---------------- GMIPSR BLOCK ----------------
+
+        elif "gmipsr" in question:
+
+            answer = (
+                "GMIPSR Block is one of the completed buildings "
+                "listed in GM University's campus development information."
+            )
+
+
+        # ---------------- FACULTY QUARTERS ----------------
+
+        elif "faculty quarters" in question:
+
+            answer = (
+                "Faculty Quarters are listed among the completed "
+                "campus buildings in GM University's campus "
+                "development information."
+            )
+
+
+        # ---------------- EVENTS ----------------
+
+        elif (
+            "event" in question
+            or "events" in question
+            or "program" in question
+        ):
+
+            answer = (
+                "Please check the Upcoming Events section of the "
+                "Digital Campus dashboard for events added by the "
+                "GM University administrator."
+            )
+
+
+        # ---------------- ROUTE ----------------
+
+        elif (
+            "route" in question
+            or "direction" in question
+            or "how to reach" in question
+            or "way to" in question
+        ):
+
+            answer = (
+                "You can use the Find Route section of the GM University "
+                "Digital Campus to calculate a route between available "
+                "campus locations."
+            )
+
+
+        # ---------------- RESOURCES ----------------
+
+        elif (
+            "resource" in question
+            or "lab" in question
+            or "facility" in question
+        ):
+
+            answer = (
+                "You can check the Resources section of the Digital "
+                "Campus dashboard for available campus resources."
+            )
+
+
+        # ---------------- GREETING ----------------
+
+        elif (
+            "hello" in question
+            or "hi" in question
+            or "hey" in question
+        ):
+
+            answer = (
+                "Hello! Welcome to the GM University Digital Campus. "
+                "I can help you with campus facilities, departments, "
+                "library, cafeteria, hostels, transport, events and routes."
+            )
+
+
+        # ---------------- THANK YOU ----------------
+
+        elif (
+            "thank you" in question
+            or "thanks" in question
+        ):
+
+            answer = (
+                "You're welcome! I'm happy to help you explore "
+                "the GM University Digital Campus."
+            )
+
+
+        # ---------------- DEFAULT RESPONSE ----------------
+
+        else:
+
+            answer = (
+                "I'm the GM University Digital Campus chatbot. "
+                "You can ask me about GM University, campus facilities, "
+                "CSE, AIML, ISE, Data Science, Cyber Security, "
+                "Cloud Computing, Library, Cafeteria, Hostels, "
+                "Sports, Transport, Events or Routes."
+            )
+
+
+    return render_template(
+        "chatbot.html",
+        answer=answer
+    )
+
+
+# ---------------- UPDATE RESOURCE ----------------
+
+@app.route("/update-resource/<int:resource_id>", methods=["POST"])
+def update_resource(resource_id):
+
+    available = request.form["available"]
+
+    connection = get_db_connection()
+
+    connection.execute("""
+        UPDATE resources
+        SET available = ?
+        WHERE id = ?
+    """, (
+        available,
+        resource_id
+    ))
+
+    connection.commit()
+    connection.close()
+
+    return redirect(url_for("admin"))
+
+
+# ---------------- UPDATE COMPLAINT STATUS ----------------
+
+@app.route("/update-complaint/<int:complaint_id>", methods=["POST"])
+def update_complaint(complaint_id):
+
+    status = request.form["status"]
+
+    connection = get_db_connection()
+
+    connection.execute("""
+        UPDATE complaints
+        SET status = ?
+        WHERE id = ?
+    """, (
+        status,
+        complaint_id
+    ))
+
+    connection.commit()
+    connection.close()
+
+    return redirect(url_for("admin"))
+
+
+# ---------------- ADMIN DASHBOARD ----------------
+
+@app.route("/admin", methods=["GET", "POST"])
+def admin():
+
+    connection = get_db_connection()
+
+    # Add new event
+    if request.method == "POST":
+
+        event_name = request.form["event_name"]
+        event_date = request.form["event_date"]
+        event_venue = request.form["event_venue"]
+        event_description = request.form["event_description"]
+
+        connection.execute("""
+            INSERT INTO events
+            (name, date, venue, description)
+            VALUES (?, ?, ?, ?)
+        """, (
+            event_name,
+            event_date,
+            event_venue,
+            event_description
+        ))
+
+        connection.commit()
+
+
+    # Get all events
+    events = connection.execute(
+        "SELECT * FROM events ORDER BY date"
+    ).fetchall()
+
+
+    # Get all resources
+    resources = connection.execute(
+        "SELECT * FROM resources ORDER BY id"
+    ).fetchall()
+
+
+    # Get all complaints
+    complaints = connection.execute(
+        "SELECT * FROM complaints ORDER BY id DESC"
+    ).fetchall()
+
+
+    connection.close()
+
+
+    return render_template(
+        "admin.html",
+        events=events,
+        resources=resources,
+        complaints=complaints
+    )
+
+
+# ---------------- START DATABASE ----------------
+
+create_database()
+
+
+# ---------------- START FLASK ----------------
+
+if __name__ == "__main__":
+    app.run(debug=False)
